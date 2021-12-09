@@ -1,4 +1,6 @@
+import torch.cuda
 import torch.nn as nn
+from torch.autograd import Variable
 import numpy as np
 def weights_init(m):
     classname=m.__class__.__name__
@@ -11,6 +13,12 @@ def weights_init(m):
     elif classname.find('BatchNorm')!=-1:
         m.weight.data.normal_(1.0,0.1)
         m.bias.data.fill_(0)
+
+def to_var(x, requires_grad=True):
+    if torch.cuda.is_available():
+        x=x.cuda()
+    return Variable(x,requires_grad=requires_grad)
+
 
 def inv_lr_scheduler(param_lr,optimizer,iter_num,
                      gamma=0.0001,power=0.75,init_lr=0.001):

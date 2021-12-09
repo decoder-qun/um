@@ -10,7 +10,7 @@ from return_dataset import return_dataset
 from model.basenet import VGGBase,Predictor,Predictor_deep,AlexNetBase
 from model.resnet import resnet34
 from loss import adentropy
-from utils import weights_init,inv_lr_scheduler
+from utils import weights_init,inv_lr_scheduler,to_var
 
 
 device="cuda" if torch.cuda.is_available() else "cpu"
@@ -24,7 +24,8 @@ parser.add_argument('--target',default='sketch',help='target dataset')
 parser.add_argument('--net',default='alexnet',help='which network to use as backbone')
 parser.add_argument('--num',type=int,default=3,help='number of labeled examples in the target')
 #TODO
-parser.add_argument('--resume',action='store_true',help='resume from checkpoint',default='save_model/temp.log_real_to_sketch_step_15.pth')
+parser.add_argument('--resume',action='store_true',help='resume from checkpoint',default='save_model/temp.log_real_to_sketch_step_40.pth')
+parser.add_argument('--meta_resume',action='store_true',help='meta resume from checkpoint',default=True)
 parser.add_argument('--multi', type=float, default=0.1, metavar='MLT',help='learning rate multiplication')
 parser.add_argument('--threshold',type=float,default=0.95,help='loss weight')
 parser.add_argument('--beta',type=float,default=1.0,help='loss weight')
@@ -38,6 +39,7 @@ parser.add_argument('--early',action='store_false',default=True,help='early stop
 parser.add_argument('--method', type=str, default='MME',choices=['S+T', 'ENT', 'MME'],
                     help='MME is proposed method, ENT is entropy minimization, S+T is training only on labeled examples')
 parser.add_argument('--log_file', type=str, default='./temp.log',help='dir to save checkpoint')
+
 args = parser.parse_args(args=[])
 print('Dataset:%s\tSource:%s\tTarget:%s\tLabeled num perclass:%s\tNetwork:%s\t' %(args.dataset, args.source, args.target, args.num, args.net))
 record_dir='record/%s/%s'%(args.dataset,args.method)
@@ -56,7 +58,6 @@ effective_num=1.0-np.power(beta,num_per_cls_list)
 per_cls_weights=(1.0-beta)/np.array(effective_num) #1-ß/1-ß^n
 per_cls_weights=per_cls_weights/np.sum(per_cls_weights) * len(num_per_cls_list) # normalization
 per_cls_weights=torch.FloatTensor(per_cls_weights)
-# print(per_cls_weights)
 
 
 if args.net=='alexnet':
@@ -95,16 +96,20 @@ for key, value in dict(G.named_parameters()).items():
 
 # torch.cuda.manual_seed(1)
 source_labeled_image=torch.FloatTensor(1).to(device)
+source_labeled_label=torch.LongTensor(1).to(device)
 target_unlabeled_image=torch.FloatTensor(1).to(device)
 target_unlabeled_image2=torch.FloatTensor(1).to(device)
-source_labeled_label=torch.LongTensor(1).to(device)
+target_labeled_image=torch.FloatTensor(1).to(device)
+target_labeled_label=torch.LongTensor(1).to(device)
 val_image=torch.FloatTensor(1).to(device)
 val_label=torch.LongTensor(1).to(device)
 
 source_labeled_image=Variable(source_labeled_image)
+source_labeled_label=Variable(source_labeled_label)
 target_unlabeled_image=Variable(target_unlabeled_image)
 target_unlabeled_image2=Variable(target_unlabeled_image2)
-source_labeled_label=Variable(source_labeled_label)
+target_labeled_image=Variable(target_labeled_image)
+target_labeled_label=Variable(target_labeled_label)
 val_image=Variable(val_image)
 val_label=Variable(val_label)
 
@@ -149,6 +154,7 @@ def main():
     source_labeled_len = len(source_labeled_loader)
     target_unlabeled_len = len(target_unlabeled_loader)
 
+    start_step=args.train_steps+1
     for step in range(start_step,args.train_steps):
         optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
         optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
@@ -172,15 +178,12 @@ def main():
         source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
         ns=source_labeled_image.size(0)
         nu=target_unlabeled_image.size(0)
-        # print(ns,nu)
 
         zero_grad_all()
         image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
         label=source_labeled_label
         feature = G(image) # 64, 4096
         predict = F1(feature) # 64, 126
-        loss=nn.CrossEntropyLoss()
-        # loss_s=loss(predict[:ns],label)
 
         loss_s=F.cross_entropy(predict[:ns],label,reduction='mean')
         pseudo_label=torch.softmax(predict[ns:ns+nu].detach(),dim=-1) # 32, 4096
@@ -200,7 +203,8 @@ def main():
         optimizer_g.step()
         optimizer_f.step()
 
-        log_train='Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}'.format(step,lr,loss_comb,loss_s,loss_u,-loss_t)
+        log_train='Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}'\
+            .format(step,lr,loss_comb,loss_s,loss_u,-loss_t)
         print(log_train)
 
         best_acc=0.0
@@ -238,14 +242,129 @@ def main():
                     torch.save(state, filename)
 
 
+# --------------------------------------------------------------------------------------------------
+#
+#                                             meta-train
+#
+# --------------------------------------------------------------------------------------------------
+    target_labeled_iter=iter(target_labeled_loader)
+    target_labeled_len=len(target_labeled_loader)
 
 
+    start_meta_step=0
+    if args.meta_resume:
+        if os.path.isfile(args.meta_resume):
+            print("=> loading meta_checkpoint '{}'".format(args.meta_resume))
+            meta_checkpoint=torch.load(args.meta_resume,map_location='cpu')
+            start_meta_step=meta_checkpoint['step']
+            print("start_meta_step:",start_meta_step)
+            G.load_state_dict(meta_checkpoint['state_dict_G'])
+            optimizer_g.load_state_dict(meta_checkpoint['optimizer_g'])
+            F1.load_state_dict(meta_checkpoint['state_dict_F'])
+            optimizer_f.load_state_dict(meta_checkpoint['optimizer_f'])
+        else:
+            print("=> no meta_checkpoint found at '{}'".format(args.meta_resume))
+
+    for step in range(start_meta_step,args.meta_train_steps):
+        # --------------------------------------------------------------------------------------------------
+        #   trained with  source & unlabeled,loss=mean( (eps+weights)*(loss_s + ß * loss_u) ), update model
+        # --------------------------------------------------------------------------------------------------
+        optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
+        optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
+        lr = optimizer_f.param_groups[0]['lr']
+
+        if step % source_labeled_len==0:
+            source_labeled_iter = iter(source_labeled_loader)
+        if step % target_unlabeled_len==0:
+            target_unlabeled_iter = iter(target_unlabeled_loader)
+        source_labeled=next(source_labeled_iter)
+        target_unlabeled=next(target_unlabeled_iter)
+
+        source_labeled_image.resize_(source_labeled[0].size()).copy_(source_labeled[0])
+        source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
+        target_unlabeled_image.resize_(target_unlabeled[0].size()).copy_(target_unlabeled[0])
+        target_unlabeled_image2.resize_(target_unlabeled[1].size()).copy_(target_unlabeled[1])
+        ns=source_labeled_image.size(0)
+        nu=target_unlabeled_image.size(0)
+
+        zero_grad_all()
+        image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
+        label=source_labeled_label
+        feature = G(image) # 64, 4096
+        predict = F1(feature) # 64, 126
 
 
+        y=torch.eye(len(per_cls_weights))
+        label_one_hot=y[label].float()
+        weights=torch.tensor(per_cls_weights).float()
+        # weights=torch.tensor(per_cls_weights.clone().detach()).float()
+        weights=weights.unsqueeze(0)
+        weights=weights.repeat(label_one_hot.shape[0],1)*label_one_hot
+        weights=weights.sum(1)
+        eps=torch.zeros(weights.size())
+        weights=to_var(weights)
+        eps=to_var(eps)
+        w=weights+eps
 
+        loss_s = F.cross_entropy(predict[:ns], label, reduction='none')
+        pseudo_label = torch.softmax(predict[ns:ns + nu].detach(), dim=-1)  # 32, 4096
+        max_probs, target_u = torch.max(pseudo_label, dim=-1)  # max on 32 numbers
+        mask = max_probs.ge(args.threshold).float()  # a list of 0 or 1
+        loss_u = (F.cross_entropy(predict[ns + nu:], target_u, reduction='none'))*mask
+        loss_comb = w*(loss_s + args.beta * loss_u)
+        loss_comb=loss_comb.mean()
+        loss_comb.backward()
+        optimizer_g.step()
+        optimizer_f.step()
+        zero_grad_all()
 
+        #TODO 这个应该放在哪个地方呢？应该是这里吧，还可以求一下unlabeled_test的loss
+        unlabeled_feature = G(target_unlabeled_image)
+        loss_t = adentropy(F1, unlabeled_feature, args.lamda)
+        loss_t.backward()
+        optimizer_g.step()
+        optimizer_f.step()
 
-    print("Hello world")
+    # --------------------------------------------------------------------------------------------------
+    #              trained with  target_labeled, update eps'<=loss_target
+    # --------------------------------------------------------------------------------------------------
+
+        if step % target_labeled_len == 0:
+            target_labeled_iter = iter(target_labeled_iter)
+        target_labeled = next(target_labeled_iter)
+
+        target_labeled_image.resize_(target_labeled[0].size()).copy_(target_labeled[0])
+        target_labeled_label.resize_(target_labeled[1].size()).copy_(target_labeled[1])
+        image=target_labeled_image
+        label=target_labeled_label
+        feature = G(image) # 32, 4096
+        predict = F1(feature) # 32, 126
+
+        loss_target = F.cross_entropy(predict, label)#, reduction='none')
+        # TODO 不做模型的更新的意思是不是就是这里不做反向传播了
+        # loss_target.backward()
+        # optimizer_g.step()
+        # optimizer_f.step()
+
+        grad_eps=torch.autograd.grad(loss_target,eps,only_inputs=True)[0]
+        new_eps=eps-0.01*grad_eps
+        w=weights+new_eps
+        del grad_eps #TODO 这里没有和longtailed一样del grads，还没有研究应该怎么写
+
+    # --------------------------------------------------------------------------------------------------
+    #              trained with  target_labeled, loss=mean( (eps'+weights)*loss_target ), update model
+    # --------------------------------------------------------------------------------------------------
+
+        loss_target_new=F.cross_entropy(predict,label,reduction='none')
+        loss_target_new=(loss_target_new*w).mean()
+        loss_target_new.backward()
+        optimizer_g.step()
+        optimizer_f.step()
+        zero_grad_all()
+
+        log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
+            .format(step, lr, loss_comb, loss_s, loss_u, -loss_t, loss_target, loss_target_new)
+        print(log_train)
 
 
 
