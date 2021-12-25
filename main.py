@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='meta-uda')
 #TODO
 parser.add_argument('--finish',type=str,default='F',choices=['T','F'],help='source part has trained or not')
 parser.add_argument('--net',default='resnet32',help='which network to use as backbone')
-parser.add_argument('--traditional_method',type=str,default='meta',choices=['meta','nometa'],help='use meta or not')
+parser.add_argument('--traditional_method',type=str,default='nometa',choices=['meta','nometa'],help='use meta or not')
 #TODO
 parser.add_argument('--resume',action='store_true',help='resume from checkpoint',
                     default=True)
@@ -310,12 +310,12 @@ def main():
             print("=> no meta_checkpoint found at '{}'".format(args.meta_resume))
 
     if args.finish=='T':
-        for step in range(start_meta_step+start_step,args.meta_train_steps+start_step):
+        for step in range(start_meta_step,args.meta_train_steps):
             # --------------------------------------------------------------------------------------------------
             #   trained with  source & unlabeled,loss=mean( (eps+weights)*(loss_s + ß * loss_u) ), update model
             # --------------------------------------------------------------------------------------------------
-            optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
-            optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
+            optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step+start_step, init_lr=args.lr)
+            optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step+start_step, init_lr=args.lr)
             lr = optimizer_f.param_groups[0]['lr']
 
             # every step we new a model, including G & F1
@@ -342,7 +342,9 @@ def main():
 
             zero_grad_all()
             image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
+            image=to_var(image,requires_grad=False)
             label=source_labeled_label
+            label=to_var(label,requires_grad=False)
             feature = meta_G(image) # 64, 4096
             predict = meta_F1(feature) # 64, 126
 
@@ -359,15 +361,26 @@ def main():
             eps=to_var(eps)
             w=weights+eps # 32*1
 
-            loss_s = F.cross_entropy(predict[:ns], label, reduction='none')
+            loss_s = F.cross_entropy(predict[:ns], label, reduce=False)
             pseudo_label = torch.softmax(predict[ns:ns + nu].detach(), dim=-1)  # 32, 126
             max_probs, target_u = torch.max(pseudo_label, dim=-1)  # max on 32 numbers
             mask = max_probs.ge(args.threshold).float()  # a list of 0 or 1
             loss_u = (F.cross_entropy(predict[ns + nu:], target_u, reduction='none'))*mask
             loss_comb = w*(loss_s + args.beta * loss_u)
-            loss_comb=loss_comb.mean()
-            # print(loss_s.mean(),loss_u.mean(),loss_comb)
-            loss_comb.backward()
+            loss_comb_mean=torch.mean(loss_comb)
+            loss_comb_sum=torch.sum(loss_comb)
+            meta_G.zero_grad()
+
+            grads = torch.autograd.grad(loss_comb_sum, (meta_G.params()), only_inputs=True, create_graph=True, allow_unused=True)
+            # grads_= ()
+            # for i in range(len(grads)):
+            #     if(grads[i]==None):
+            #         grads_+=(grads[i],)
+            #         print(i)
+            meta_lr = lr * ((0.01 ** int(step >= 160)) * (0.01 ** int(step >= 180)))
+            meta_G.update_params(meta_lr, source_params=grads)
+
+            # loss_comb.backward()
             optimizer_g.step()
             optimizer_f.step()
             zero_grad_all()
@@ -391,32 +404,20 @@ def main():
             target_labeled_label.resize_(target_labeled[1].size()).copy_(target_labeled[1])
             image=target_labeled_image
             label=target_labeled_label
+            image=to_var(image,requires_grad=False)
+            label=to_var(label,requires_grad=False)
             feature = meta_G(image) # 32, 4096
             predict = meta_F1(feature) # 32, 126
 
             loss_target = F.cross_entropy(predict, label)#, reduction='none')
-            print(loss_target)
             # TODO correct or not
-            loss_target.backward()
-            optimizer_g.step()
-            optimizer_f.step()
-
-            grad_eps=torch.autograd.grad(loss_target, eps, allow_unused=True)[0]
-            a=np.array(grad_eps)
-            print(a)
-            np.nan_to_num(a, copy=False)
-            print(a)
-            grad_eps=torch.tensor(a, dtype=torch.float)
-            print(grad_eps)
-            print(type(grad_eps))
-            print(grad_eps.shape)
-            print(grad_eps.requires_grad)
+            # loss_target.backward()
+            # optimizer_g.step()
+            # optimizer_f.step()
+            grad_eps = torch.autograd.grad(loss_target, eps, only_inputs=True)[0]
             new_eps=eps-0.01*grad_eps
-            new_eps = torch.FloatTensor(1).to(device)
-            # print(new_eps.requires_grad)
             w=weights+new_eps
-            # print(w.requires_grad)
-            del grad_eps
+            del grad_eps, grads
             #TODO 这里没有和longtailed一样del grads，还没有研究应该怎么写
 
         # --------------------------------------------------------------------------------------------------
@@ -428,14 +429,51 @@ def main():
             loss_target_new=F.cross_entropy(predict,label,reduction='none')
             loss_target_new=(loss_target_new*w).mean()
             #TODO 可能有点问题
-            loss_target_new.backward(new_eps)
+            loss_target_new.backward()
             optimizer_g.step()
             optimizer_f.step()
             zero_grad_all()
 
             log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
-                .format(step, lr, loss_comb, loss_s, loss_u, -loss_t, loss_target, loss_target_new)
+                .format(step, lr, loss_comb_mean, loss_s.mean(), loss_u.mean(), -loss_t, loss_target, loss_target_new)
             print(log_train)
+
+            best_acc = 0.0
+            if step % args.save_interval == 0 and step > 0:
+                loss_val, acc_val = test(target_val_labeled_loader)
+                G.train()
+                F1.train()
+                if acc_val >= best_acc:
+                    best_acc = acc_val
+                    counter = 0
+                else:
+                    counter += 1
+                if args.early:
+                    if counter > args.patience:
+                        break;
+                print('Best val accuracy %f, Current val accuracy %f\n' % (best_acc, acc_val))
+
+                print('record %s' % record_file)
+                with open(record_file, 'a') as f:
+                    f.write('meta step %d, best %f, current val accuracy %f\n' % (step, best_acc, acc_val))
+
+
+
+            G.train()
+            F1.train()
+
+            if args.save_check:
+                if step % args.save_interval == 0 and step > 0:
+                    print('=> saving meta model')
+                    if not os.path.exists(args.save_model_path):
+                        os.makedirs(args.save_model_path)
+                    filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}.pth".
+                                            format(args.log_file, args.source, args.target, step))
+                    state = {'step': step + 1,
+                             'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
+                             'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict()}
+                    torch.save(state, filename)
+
 
 
 

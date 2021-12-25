@@ -67,15 +67,16 @@ class MetaModule(nn.Module):
         if source_params is not None:
             # (name_t,param_t 16),src 16
             for tgt, src in zip(self.named_params(self), source_params):
-                name_t, param_t = tgt
-                # name_s, param_s = src
-                # grad = param_s.grad
-                # name_s, param_s = src
-                grad = src
-                if first_order:
-                    grad = to_var(grad.detach().data)
-                tmp = param_t - lr_inner * grad#tmp,grad,param_t
-                self.set_param(self, name_t, tmp)
+                if(src!=None):
+                    name_t, param_t = tgt
+                    # name_s, param_s = src
+                    # grad = param_s.grad
+                    # name_s, param_s = src
+                    grad = src
+                    if first_order:
+                        grad = to_var(grad.detach().data)
+                    tmp = param_t - lr_inner * grad#tmp,grad,param_t
+                    self.set_param(self, name_t, tmp)
         else:
 
             for name, param in self.named_params(self):
