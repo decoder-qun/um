@@ -5,6 +5,7 @@ from __future__ import print_function
 from torch.autograd import Function
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import math
 import torch.utils.model_zoo as model_zoo
 
@@ -261,3 +262,36 @@ def resnet152(pretrained=False):
     if pretrained:
         model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
     return model
+
+
+class Predictor(nn.Module):
+    def __init__(self, num_class=64, inc=4096, temp=0.05):
+        super(Predictor, self).__init__()
+        self.fc = nn.Linear(inc, num_class, bias=False)
+        self.num_class = num_class
+        self.temp = temp
+
+    def forward(self, x, reverse=False, eta=0.1):
+        if reverse:
+            x = grad_reverse(x, eta)
+        x = F.normalize(x)
+        x_out = self.fc(x) / self.temp
+        return x_out
+
+
+class Predictor_deep(nn.Module):
+    def __init__(self, num_class=64, inc=4096, temp=0.05):
+        super(Predictor_deep, self).__init__()
+        self.fc1 = nn.Linear(inc, 512)
+        self.fc2 = nn.Linear(512, num_class, bias=False)
+        self.num_class = num_class
+        self.temp = temp
+
+    # S&U-reverse=False Val-unlabeled-reversed=True
+    def forward(self, x, reverse=False, eta=0.1):
+        x = self.fc1(x) # [72, 512]
+        if reverse:
+            x = grad_reverse(x, eta)
+        x = F.normalize(x) # [72, 512]
+        x_out = self.fc2(x) / self.temp # [72, 126]
+        return x_out

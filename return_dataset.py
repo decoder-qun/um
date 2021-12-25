@@ -165,10 +165,7 @@ def return_dataset(args):
 
     #70358,378,23826,378,23826
     source_labeled_dataset=Imagelists_VISDA(source_filepath,image_path,transform=data_transforms['train'])
-    # TODO Question:target should perform what data_transform?
-    # TODO In pacl, it is 'train', while in mme, it is 'val'.
-    # TODO Can I perform 'train' on T, and change the orginal loss to pacl loss in meta-train stage
-    target_labeled_dataset=Imagelists_VISDA(target_filepath,image_path,transform=data_transforms['val'])
+    target_labeled_dataset=Imagelists_VISDA(target_filepath,image_path,transform=data_transforms['train'])
     target_unlabeled_dataset=Imagelists_VISDA(target_unlabeled_filepath,transform=data_transforms['val'],transform2=data_transforms['self'])
     target_val_labeled_dataset=Imagelists_VISDA(target_val_filepath,transform=data_transforms['val'])
     target_test_unlabeled_dataset=Imagelists_VISDA(target_unlabeled_filepath,transform=data_transforms['test'])

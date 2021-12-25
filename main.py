@@ -7,8 +7,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.autograd import Variable
 from return_dataset import return_dataset
-from model.basenet import VGGBase,Predictor,Predictor_deep,AlexNetBase
-from model.resnet import resnet34
+from model.basenet import VGGBase, AlexNetBase
+from model.resnet_meta import resnet34,ResNet32, resnet32, Predictor_meta, Predictor_deep_meta
+from model.resnet import resnet34,Predictor, Predictor_deep
 from loss import adentropy
 from utils import weights_init,inv_lr_scheduler,to_var
 
@@ -16,21 +17,28 @@ from utils import weights_init,inv_lr_scheduler,to_var
 device="cuda" if torch.cuda.is_available() else "cpu"
 print(device)
 parser = argparse.ArgumentParser(description='meta-uda')
+#TODO
+parser.add_argument('--finish',type=str,default='F',choices=['T','F'],help='source part has trained or not')
+parser.add_argument('--net',default='resnet32',help='which network to use as backbone')
+parser.add_argument('--traditional_method',type=str,default='meta',choices=['meta','nometa'],help='use meta or not')
+#TODO
+parser.add_argument('--resume',action='store_true',help='resume from checkpoint',
+                    default=True)
+parser.add_argument('--meta_resume',action='store_true',help='meta resume from checkpoint',
+                    default=True)
+parser.add_argument('--multi', type=float, default=0.1, metavar='MLT',help='learning rate multiplication')
+#TODO
 parser.add_argument('--train_steps',type=int,default=50000,help='how many steps in train stage')
-parser.add_argument('--meta_train_steps',type=int,default=2000,help='how many steps in meta train stage')
+parser.add_argument('--meta_train_steps',type=int,default=20000,help='how many steps in meta train stage')
 parser.add_argument('--dataset',type=str,default='multi',choices=['multi','office','office_home'],help='the name of dataset')
 parser.add_argument('-source',default='real',help='source dataset')
 parser.add_argument('--target',default='sketch',help='target dataset')
-parser.add_argument('--net',default='alexnet',help='which network to use as backbone')
+
 parser.add_argument('--num',type=int,default=3,help='number of labeled examples in the target')
-#TODO
-parser.add_argument('--resume',action='store_true',help='resume from checkpoint',default='save_model/temp.log_real_to_sketch_step_40.pth')
-parser.add_argument('--meta_resume',action='store_true',help='meta resume from checkpoint',default=True)
-parser.add_argument('--multi', type=float, default=0.1, metavar='MLT',help='learning rate multiplication')
 parser.add_argument('--threshold',type=float,default=0.95,help='loss weight')
 parser.add_argument('--beta',type=float,default=1.0,help='loss weight')
 parser.add_argument('--lr',type=float,default=0.01,metavar='LR',help='learning rate')
-parser.add_argument('--save_interval',type=int,default=10,metavar='N',help='how many batches to wait before logging')
+parser.add_argument('--save_interval',type=int,default=100,metavar='N',help='how many batches to wait before logging')
 parser.add_argument('--save_check',action='store_true',default=True,help='save checkpoint or not')
 parser.add_argument('--save_model_path',type=str,default='./save_model',help='dir to save model')
 parser.add_argument('--lamda',type=float,default=0.1,metavar='LAM',help='value of lamda used in entropy and adentropy')
@@ -59,25 +67,42 @@ per_cls_weights=(1.0-beta)/np.array(effective_num) #1-ß/1-ß^n
 per_cls_weights=per_cls_weights/np.sum(per_cls_weights) * len(num_per_cls_list) # normalization
 per_cls_weights=torch.FloatTensor(per_cls_weights)
 
+def G_F1_meta(args):
+    if args.net=='resnet32':
+        G=resnet32()
+        inc=512
+    else:
+        raise ValueError("Model cannot be recognized.")
+    # F1 = Predictor_meta(num_class=len(num_per_cls_list), inc=inc)  # temp=T=0.05
 
-if args.net=='alexnet':
-    G=AlexNetBase()
-    inc=4096
-elif args.net=='resnet34':
-    G=resnet34()
-    inc=512
-elif args.net=='vgg':
-    G=VGGBase()
-    inc=4096
-else:
-    raise ValueError("Model cannot be recognized.")
+    if "resnet" in args.net:
+        F1=Predictor_deep(num_class=len(num_per_cls_list),inc=inc)
+    else :
+        F1=Predictor(num_class=len(num_per_cls_list),inc=inc) #temp=T=0.05
+    return G,F1
 
-if "resnet" in args.net:
-    F1=Predictor_deep(num_class=len(num_per_cls_list),inc=inc)
-else:
-    F1=Predictor(num_class=len(num_per_cls_list),inc=inc) #temp=T=0.05
+def G_F1(args):
+    if args.net=='alexnet':
+        G=AlexNetBase()
+        inc=4096
+    elif args.net=='resnet34':
+        G=resnet34()
+        inc=512
+    elif args.net=='vgg':
+        G=VGGBase()
+        inc=4096
+    else:
+        raise ValueError("Model cannot be recognized.")
+    if "resnet" in args.net:
+        F1=Predictor_deep(num_class=len(num_per_cls_list),inc=inc)
+    else :
+        F1=Predictor(num_class=len(num_per_cls_list),inc=inc) #temp=T=0.05
+    return G,F1
 
-
+if args.traditional_method == 'meta':
+    G,F1=G_F1_meta(args)
+elif args.traditional_method == 'nometa':
+    G,F1=G_F1(args)
 lr=args.lr
 weights_init(F1)
 G.to(device)
@@ -103,6 +128,8 @@ target_labeled_image=torch.FloatTensor(1).to(device)
 target_labeled_label=torch.LongTensor(1).to(device)
 val_image=torch.FloatTensor(1).to(device)
 val_label=torch.LongTensor(1).to(device)
+eps=torch.FloatTensor(1).to(device)
+weights=torch.FloatTensor(1).to(device)
 
 source_labeled_image=Variable(source_labeled_image)
 source_labeled_label=Variable(source_labeled_label)
@@ -114,9 +141,14 @@ val_image=Variable(val_image)
 val_label=Variable(val_label)
 
 
+
 def main():
-    optimizer_g=optim.SGD(params,momentum=0.9,weight_decay=0.0005,nesterov=True)
-    optimizer_f=optim.SGD(list(F1.parameters()),lr=1.0,momentum=0.9,weight_decay=0.0005,nesterov=True)
+    if args.traditional_method == 'nometa':
+        optimizer_g=optim.SGD(params,momentum=0.9,weight_decay=0.0005,nesterov=True)
+        optimizer_f=optim.SGD(list(F1.parameters()),lr=1.0,momentum=0.9,weight_decay=0.0005,nesterov=True)
+    elif args.traditional_method== 'meta':
+        optimizer_g = torch.optim.SGD(G.params(), args.lr, momentum=0.9, nesterov=True, weight_decay=0.0005)
+        optimizer_f = torch.optim.SGD(list(F1.parameters()), lr=1.0, momentum=0.9, nesterov=True, weight_decay=0.0005)
 
     G.train()
     F1.train()
@@ -154,92 +186,102 @@ def main():
     source_labeled_len = len(source_labeled_loader)
     target_unlabeled_len = len(target_unlabeled_loader)
 
-    start_step=args.train_steps+1
-    for step in range(start_step,args.train_steps):
-        optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
-        optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
-        lr = optimizer_f.param_groups[0]['lr']
+    # start_step=args.train_steps+1
+    if args.finish=='F':
+        for step in range(start_step,args.train_steps):
+            optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
+            optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
+            lr = optimizer_f.param_groups[0]['lr']
 
-        # source dataset & target dataset
-        # if all the source data has been iterated
-        # in one step, next() produces a batchsize of data.
-        # 2199/32 about 68 steps,745/32 about 23 steps, so they are all oversampling
-        if step % source_labeled_len==0:
-            source_labeled_iter = iter(source_labeled_loader)
-        if step % target_unlabeled_len==0:
-            target_unlabeled_iter = iter(target_unlabeled_loader)
-        source_labeled=next(source_labeled_iter)
-        target_unlabeled=next(target_unlabeled_iter)
+            # source dataset & target dataset
+            # if all the source data has been iterated
+            # in one step, next() produces a batchsize of data.
+            # 2199/32 about 68 steps,745/32 about 23 steps, so they are all oversampling
+            if step % source_labeled_len==0:
+                source_labeled_iter = iter(source_labeled_loader)
+            if step % target_unlabeled_len==0:
+                target_unlabeled_iter = iter(target_unlabeled_loader)
+            source_labeled=next(source_labeled_iter)
+            target_unlabeled=next(target_unlabeled_iter)
 
-        # first resize the torch tensor, making the tensor the same shape as the image, then copy the image
-        source_labeled_image.resize_(source_labeled[0].size()).copy_(source_labeled[0])
-        target_unlabeled_image.resize_(target_unlabeled[0].size()).copy_(target_unlabeled[0])
-        target_unlabeled_image2.resize_(target_unlabeled[1].size()).copy_(target_unlabeled[1])
-        source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
-        ns=source_labeled_image.size(0)
-        nu=target_unlabeled_image.size(0)
+            # first resize the torch tensor, making the tensor the same shape as the image, then copy the image
+            source_labeled_image.resize_(source_labeled[0].size()).copy_(source_labeled[0])
+            target_unlabeled_image.resize_(target_unlabeled[0].size()).copy_(target_unlabeled[0])
+            target_unlabeled_image2.resize_(target_unlabeled[1].size()).copy_(target_unlabeled[1])
+            source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
+            ns=source_labeled_image.size(0)
+            nu=target_unlabeled_image.size(0)
 
-        zero_grad_all()
-        image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
-        label=source_labeled_label
-        feature = G(image) # 64, 4096
-        predict = F1(feature) # 64, 126
+            zero_grad_all()
+            #ns
+            #nu
+            #nu
 
-        loss_s=F.cross_entropy(predict[:ns],label,reduction='mean')
-        pseudo_label=torch.softmax(predict[ns:ns+nu].detach(),dim=-1) # 32, 4096
-        max_probs, target_u=torch.max(pseudo_label,dim=-1) # max on 32 numbers
-        mask=max_probs.ge(args.threshold).float() # a list of 0 or 1
-        loss_u=F.cross_entropy(predict[ns+nu:],target_u,reduction='none')
-        loss_u=(loss_u*mask).mean()
-        loss_comb=loss_s+args.beta*loss_u
-        loss_comb.backward()
-        optimizer_g.step()
-        optimizer_f.step()
-        zero_grad_all()
+            #----------------ns-----------------  ------nu-------------- --------nu-------------
+            image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
+            # [72, 3, 224, 224]
+            label=source_labeled_label
+            # [24]
+            feature = G(image) # 64, 4096
+            # [72, 512]
+            predict = F1(feature) # 64, 126(32+16+16)
 
-        unlabeled_feature=G(target_unlabeled_image)
-        loss_t=adentropy(F1,unlabeled_feature,args.lamda)
-        loss_t.backward()
-        optimizer_g.step()
-        optimizer_f.step()
 
-        log_train='Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}'\
-            .format(step,lr,loss_comb,loss_s,loss_u,-loss_t)
-        print(log_train)
+            loss_s=F.cross_entropy(predict[:ns],label,reduction='mean')
+            pseudo_label=torch.softmax(predict[ns:ns+nu].detach(),dim=-1) # 32, 4096
+            max_probs, target_u=torch.max(pseudo_label,dim=-1) # max on 32 numbers
+            mask=max_probs.ge(args.threshold).float() # a list of 0 or 1
+            loss_u=F.cross_entropy(predict[ns+nu:],target_u,reduction='none')
+            loss_u=(loss_u*mask).mean()
+            loss_comb=loss_s+args.beta*loss_u
+            loss_comb.backward()
+            optimizer_g.step()
+            optimizer_f.step()
+            zero_grad_all()
 
-        best_acc=0.0
-        if step% args.save_interval ==0 and step>0:
-            loss_val,acc_val=test(target_val_labeled_loader)
-            G.train()
-            F1.train()
-            if acc_val>=best_acc:
-                best_acc=acc_val
-                counter=0
-            else:
-                counter+=1
-            if args.early:
-                if counter>args.patience:
-                    break;
-            print('Best val accuracy %f, Current val accuracy %f\n'%(best_acc,acc_val))
+            unlabeled_feature=G(target_unlabeled_image)
+            loss_t=adentropy(F1,unlabeled_feature,args.lamda)
+            loss_t.backward()
+            optimizer_g.step()
+            optimizer_f.step()
 
-            print('record %s'% record_file)
-            with open(record_file,'a') as f:
-                f.write('step %d, best %f, current val accuracy %f\n'%(step,best_acc,acc_val))
+            log_train='Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}'\
+                .format(step,lr,loss_comb,loss_s,loss_u,-loss_t)
+            print(log_train)
 
-            G.train()
-            F1.train()
+            best_acc=0.0
+            if step% args.save_interval ==0 and step>0:
+                loss_val,acc_val=test(target_val_labeled_loader)
+                G.train()
+                F1.train()
+                if acc_val>=best_acc:
+                    best_acc=acc_val
+                    counter=0
+                else:
+                    counter+=1
+                if args.early:
+                    if counter>args.patience:
+                        break;
+                print('Best val accuracy %f, Current val accuracy %f\n'%(best_acc,acc_val))
 
-            if args.save_check:
-                if step% args.save_interval== 0 and step>0:
-                    print('=> saving model')
-                    if not os.path.exists(args.save_model_path):
-                        os.makedirs(args.save_model_path)
-                    filename = os.path.join(args.save_model_path,"{}_{}_to_{}_step_{}.pth".
-                                            format(args.log_file, args.source,args.target,step))
-                    state = {'step': step + 1,
-                             'state_dict_G': G.state_dict(),'optimizer_g': optimizer_g.state_dict(),
-                             'state_dict_F': F1.state_dict(),'optimizer_f': optimizer_f.state_dict()}
-                    torch.save(state, filename)
+                print('record %s'% record_file)
+                with open(record_file,'a') as f:
+                    f.write('step %d, best %f, current val accuracy %f\n'%(step,best_acc,acc_val))
+
+                G.train()
+                F1.train()
+
+                if args.save_check:
+                    if step% args.save_interval== 0 and step>0:
+                        print('=> saving model')
+                        if not os.path.exists(args.save_model_path):
+                            os.makedirs(args.save_model_path)
+                        filename = os.path.join(args.save_model_path,"{}_{}_to_{}_step_{}.pth".
+                                                format(args.log_file, args.source,args.target,step))
+                        state = {'step': step + 1,
+                                 'state_dict_G': G.state_dict(),'optimizer_g': optimizer_g.state_dict(),
+                                 'state_dict_F': F1.state_dict(),'optimizer_f': optimizer_f.state_dict()}
+                        torch.save(state, filename)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -252,6 +294,8 @@ def main():
 
 
     start_meta_step=0
+
+
     if args.meta_resume:
         if os.path.isfile(args.meta_resume):
             print("=> loading meta_checkpoint '{}'".format(args.meta_resume))
@@ -265,106 +309,133 @@ def main():
         else:
             print("=> no meta_checkpoint found at '{}'".format(args.meta_resume))
 
-    for step in range(start_meta_step,args.meta_train_steps):
+    if args.finish=='T':
+        for step in range(start_meta_step+start_step,args.meta_train_steps+start_step):
+            # --------------------------------------------------------------------------------------------------
+            #   trained with  source & unlabeled,loss=mean( (eps+weights)*(loss_s + ß * loss_u) ), update model
+            # --------------------------------------------------------------------------------------------------
+            optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
+            optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
+            lr = optimizer_f.param_groups[0]['lr']
+
+            # every step we new a model, including G & F1
+            meta_G, meta_F1 = G_F1_meta(args)
+            meta_G.to(device)
+            meta_F1.to(device)
+            # copy params
+            meta_G.load_state_dict(G.state_dict())
+            meta_F1.load_state_dict(F1.state_dict())
+
+            if step % source_labeled_len==0:
+                source_labeled_iter = iter(source_labeled_loader)
+            if step % target_unlabeled_len==0:
+                target_unlabeled_iter = iter(target_unlabeled_loader)
+            source_labeled=next(source_labeled_iter)
+            target_unlabeled=next(target_unlabeled_iter)
+
+            source_labeled_image.resize_(source_labeled[0].size()).copy_(source_labeled[0])
+            source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
+            target_unlabeled_image.resize_(target_unlabeled[0].size()).copy_(target_unlabeled[0])
+            target_unlabeled_image2.resize_(target_unlabeled[1].size()).copy_(target_unlabeled[1])
+            ns=source_labeled_image.size(0)
+            nu=target_unlabeled_image.size(0)
+
+            zero_grad_all()
+            image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
+            label=source_labeled_label
+            feature = meta_G(image) # 64, 4096
+            predict = meta_F1(feature) # 64, 126
+
+
+            y=torch.eye(len(per_cls_weights)) # 126*126
+            label_one_hot=y[label].float() # 32*126 有哪类，就取哪一行
+            weights=torch.tensor(per_cls_weights).float() # 126
+            # weights=torch.tensor(per_cls_weights.clone().detach()).float()
+            weights=weights.unsqueeze(0)
+            weights=weights.repeat(label_one_hot.shape[0],1)*label_one_hot # 32*126
+            weights=weights.sum(1) # 32
+            eps=torch.zeros(weights.size())
+            weights=to_var(weights)
+            eps=to_var(eps)
+            w=weights+eps # 32*1
+
+            loss_s = F.cross_entropy(predict[:ns], label, reduction='none')
+            pseudo_label = torch.softmax(predict[ns:ns + nu].detach(), dim=-1)  # 32, 126
+            max_probs, target_u = torch.max(pseudo_label, dim=-1)  # max on 32 numbers
+            mask = max_probs.ge(args.threshold).float()  # a list of 0 or 1
+            loss_u = (F.cross_entropy(predict[ns + nu:], target_u, reduction='none'))*mask
+            loss_comb = w*(loss_s + args.beta * loss_u)
+            loss_comb=loss_comb.mean()
+            # print(loss_s.mean(),loss_u.mean(),loss_comb)
+            loss_comb.backward()
+            optimizer_g.step()
+            optimizer_f.step()
+            zero_grad_all()
+
+            #TODO 这个应该放在哪个地方呢？应该是这里吧，还可以求一下unlabeled_test的loss
+            unlabeled_feature = G(target_unlabeled_image)
+            loss_t = adentropy(F1, unlabeled_feature, args.lamda)
+            loss_t.backward()
+            optimizer_g.step()
+            optimizer_f.step()
+
         # --------------------------------------------------------------------------------------------------
-        #   trained with  source & unlabeled,loss=mean( (eps+weights)*(loss_s + ß * loss_u) ), update model
+        #              trained with  target_labeled, update eps'<=loss_target
         # --------------------------------------------------------------------------------------------------
-        optimizer_g = inv_lr_scheduler(param_lr_g, optimizer_g, step, init_lr=args.lr)
-        optimizer_f = inv_lr_scheduler(param_lr_f, optimizer_f, step, init_lr=args.lr)
-        lr = optimizer_f.param_groups[0]['lr']
 
-        if step % source_labeled_len==0:
-            source_labeled_iter = iter(source_labeled_loader)
-        if step % target_unlabeled_len==0:
-            target_unlabeled_iter = iter(target_unlabeled_loader)
-        source_labeled=next(source_labeled_iter)
-        target_unlabeled=next(target_unlabeled_iter)
+            if step % target_labeled_len == 0:
+                target_labeled_iter = iter(target_labeled_iter)
+            target_labeled = next(target_labeled_iter)
 
-        source_labeled_image.resize_(source_labeled[0].size()).copy_(source_labeled[0])
-        source_labeled_label.resize_(source_labeled[1].size()).copy_(source_labeled[1])
-        target_unlabeled_image.resize_(target_unlabeled[0].size()).copy_(target_unlabeled[0])
-        target_unlabeled_image2.resize_(target_unlabeled[1].size()).copy_(target_unlabeled[1])
-        ns=source_labeled_image.size(0)
-        nu=target_unlabeled_image.size(0)
+            target_labeled_image.resize_(target_labeled[0].size()).copy_(target_labeled[0])
+            target_labeled_label.resize_(target_labeled[1].size()).copy_(target_labeled[1])
+            image=target_labeled_image
+            label=target_labeled_label
+            feature = meta_G(image) # 32, 4096
+            predict = meta_F1(feature) # 32, 126
 
-        zero_grad_all()
-        image=torch.cat((source_labeled_image,target_unlabeled_image,target_unlabeled_image2),0)
-        label=source_labeled_label
-        feature = G(image) # 64, 4096
-        predict = F1(feature) # 64, 126
+            loss_target = F.cross_entropy(predict, label)#, reduction='none')
+            print(loss_target)
+            # TODO correct or not
+            loss_target.backward()
+            optimizer_g.step()
+            optimizer_f.step()
 
+            grad_eps=torch.autograd.grad(loss_target, eps, allow_unused=True)[0]
+            a=np.array(grad_eps)
+            print(a)
+            np.nan_to_num(a, copy=False)
+            print(a)
+            grad_eps=torch.tensor(a, dtype=torch.float)
+            print(grad_eps)
+            print(type(grad_eps))
+            print(grad_eps.shape)
+            print(grad_eps.requires_grad)
+            new_eps=eps-0.01*grad_eps
+            new_eps = torch.FloatTensor(1).to(device)
+            # print(new_eps.requires_grad)
+            w=weights+new_eps
+            # print(w.requires_grad)
+            del grad_eps
+            #TODO 这里没有和longtailed一样del grads，还没有研究应该怎么写
 
-        y=torch.eye(len(per_cls_weights))
-        label_one_hot=y[label].float()
-        weights=torch.tensor(per_cls_weights).float()
-        # weights=torch.tensor(per_cls_weights.clone().detach()).float()
-        weights=weights.unsqueeze(0)
-        weights=weights.repeat(label_one_hot.shape[0],1)*label_one_hot
-        weights=weights.sum(1)
-        eps=torch.zeros(weights.size())
-        weights=to_var(weights)
-        eps=to_var(eps)
-        w=weights+eps
+        # --------------------------------------------------------------------------------------------------
+        #              trained with  target_labeled, loss=mean( (eps'+weights)*loss_target ), update model
+        # --------------------------------------------------------------------------------------------------
+            # 要用之前的G和F1来提取target特征和预测，用的还是同一批数据，不用重新iter
+            feature = G(image) # 32, 4096
+            predict = F1(feature) # 32, 126
+            loss_target_new=F.cross_entropy(predict,label,reduction='none')
+            loss_target_new=(loss_target_new*w).mean()
+            #TODO 可能有点问题
+            loss_target_new.backward(new_eps)
+            optimizer_g.step()
+            optimizer_f.step()
+            zero_grad_all()
 
-        loss_s = F.cross_entropy(predict[:ns], label, reduction='none')
-        pseudo_label = torch.softmax(predict[ns:ns + nu].detach(), dim=-1)  # 32, 4096
-        max_probs, target_u = torch.max(pseudo_label, dim=-1)  # max on 32 numbers
-        mask = max_probs.ge(args.threshold).float()  # a list of 0 or 1
-        loss_u = (F.cross_entropy(predict[ns + nu:], target_u, reduction='none'))*mask
-        loss_comb = w*(loss_s + args.beta * loss_u)
-        loss_comb=loss_comb.mean()
-        loss_comb.backward()
-        optimizer_g.step()
-        optimizer_f.step()
-        zero_grad_all()
-
-        #TODO 这个应该放在哪个地方呢？应该是这里吧，还可以求一下unlabeled_test的loss
-        unlabeled_feature = G(target_unlabeled_image)
-        loss_t = adentropy(F1, unlabeled_feature, args.lamda)
-        loss_t.backward()
-        optimizer_g.step()
-        optimizer_f.step()
-
-    # --------------------------------------------------------------------------------------------------
-    #              trained with  target_labeled, update eps'<=loss_target
-    # --------------------------------------------------------------------------------------------------
-
-        if step % target_labeled_len == 0:
-            target_labeled_iter = iter(target_labeled_iter)
-        target_labeled = next(target_labeled_iter)
-
-        target_labeled_image.resize_(target_labeled[0].size()).copy_(target_labeled[0])
-        target_labeled_label.resize_(target_labeled[1].size()).copy_(target_labeled[1])
-        image=target_labeled_image
-        label=target_labeled_label
-        feature = G(image) # 32, 4096
-        predict = F1(feature) # 32, 126
-
-        loss_target = F.cross_entropy(predict, label)#, reduction='none')
-        # TODO 不做模型的更新的意思是不是就是这里不做反向传播了
-        # loss_target.backward()
-        # optimizer_g.step()
-        # optimizer_f.step()
-
-        grad_eps=torch.autograd.grad(loss_target,eps,only_inputs=True)[0]
-        new_eps=eps-0.01*grad_eps
-        w=weights+new_eps
-        del grad_eps #TODO 这里没有和longtailed一样del grads，还没有研究应该怎么写
-
-    # --------------------------------------------------------------------------------------------------
-    #              trained with  target_labeled, loss=mean( (eps'+weights)*loss_target ), update model
-    # --------------------------------------------------------------------------------------------------
-
-        loss_target_new=F.cross_entropy(predict,label,reduction='none')
-        loss_target_new=(loss_target_new*w).mean()
-        loss_target_new.backward()
-        optimizer_g.step()
-        optimizer_f.step()
-        zero_grad_all()
-
-        log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
-            .format(step, lr, loss_comb, loss_s, loss_u, -loss_t, loss_target, loss_target_new)
-        print(log_train)
+            log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
+                .format(step, lr, loss_comb, loss_s, loss_u, -loss_t, loss_target, loss_target_new)
+            print(log_train)
 
 
 
