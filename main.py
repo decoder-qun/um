@@ -20,7 +20,7 @@ parser = argparse.ArgumentParser(description='meta-uda')
 #TODO
 parser.add_argument('--finish',type=str,default='F',choices=['T','F'],help='source part has trained or not')
 parser.add_argument('--net',default='resnet32',help='which network to use as backbone')
-parser.add_argument('--traditional_method',type=str,default='nometa',choices=['meta','nometa'],help='use meta or not')
+parser.add_argument('--traditional_method',type=str,default='meta',choices=['meta','nometa'],help='use meta or not')
 #TODO
 parser.add_argument('--resume',action='store_true',help='resume from checkpoint',
                     default=True)
@@ -109,7 +109,7 @@ G.to(device)
 F1.to(device)
 
 params = []
-#TODO why split key with 'classifier'?
+
 for key, value in dict(G.named_parameters()).items():
     if value.requires_grad:
         if 'classifier' not in key:
@@ -171,7 +171,6 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
-    #后期更新lr用
     param_lr_g=[]
     param_lr_f=[]
     for param_group in optimizer_g.param_groups:
@@ -350,7 +349,7 @@ def main():
 
 
             y=torch.eye(len(per_cls_weights)) # 126*126
-            label_one_hot=y[label].float() # 32*126 有哪类，就取哪一行
+            label_one_hot=y[label].float() # 32*126
             weights=torch.tensor(per_cls_weights).float() # 126
             # weights=torch.tensor(per_cls_weights.clone().detach()).float()
             weights=weights.unsqueeze(0)
@@ -385,9 +384,9 @@ def main():
             optimizer_f.step()
             zero_grad_all()
 
-            #TODO 这个应该放在哪个地方呢？应该是这里吧，还可以求一下unlabeled_test的loss
-            unlabeled_feature = G(target_unlabeled_image)
-            loss_t = adentropy(F1, unlabeled_feature, args.lamda)
+            # test
+            unlabeled_feature = meta_G(target_unlabeled_image)
+            loss_t = adentropy(meta_F1, unlabeled_feature, args.lamda)
             loss_t.backward()
             optimizer_g.step()
             optimizer_f.step()
@@ -418,7 +417,6 @@ def main():
             new_eps=eps-0.01*grad_eps
             w=weights+new_eps
             del grad_eps, grads
-            #TODO 这里没有和longtailed一样del grads，还没有研究应该怎么写
 
         # --------------------------------------------------------------------------------------------------
         #              trained with  target_labeled, loss=mean( (eps'+weights)*loss_target ), update model
@@ -428,7 +426,6 @@ def main():
             predict = F1(feature) # 32, 126
             loss_target_new=F.cross_entropy(predict,label,reduction='none')
             loss_target_new=(loss_target_new*w).mean()
-            #TODO 可能有点问题
             loss_target_new.backward()
             optimizer_g.step()
             optimizer_f.step()
