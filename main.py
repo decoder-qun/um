@@ -455,7 +455,6 @@ def main():
                     f.write('meta step %d, best %f, current val accuracy %f\n' % (step, best_acc, acc_val))
 
 
-
             G.train()
             F1.train()
 
