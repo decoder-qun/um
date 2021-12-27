@@ -24,10 +24,10 @@ parser.add_argument('--traditional_method', type=str, default='nometa', choices=
                     help='use meta or not')
 # TODO
 parser.add_argument('--resume', action='store_true', help='resume from checkpoint',
-                    default='/gdrive/MyDrive/Colab Notebooks/um2/um/save_model/temp.log_real_to_sketch_step_7500.pth')
-parser.add_argument('--save_interval', type=int, default=500, metavar='N',
+                    default=True)
+parser.add_argument('--save_interval', type=int, default=1000, metavar='N',
                     help='how many batches to wait before logging')
-parser.add_argument('--val_interval', type=int, default=300, metavar='N',
+parser.add_argument('--val_interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging')
 parser.add_argument('--meta_resume', action='store_true', help='meta resume from checkpoint',
                     default=True)
@@ -49,7 +49,7 @@ parser.add_argument('--save_check', action='store_true', default=True, help='sav
 parser.add_argument('--save_model_path', type=str, default='./save_model', help='dir to save model')
 parser.add_argument('--lamda', type=float, default=0.1, metavar='LAM',
                     help='value of lamda used in entropy and adentropy')
-parser.add_argument('--patience', type=int, default=5, metavar='S',
+parser.add_argument('--patience', type=int, default=30, metavar='S',
                     help='early stopping to wait for improvement before terminating')
 parser.add_argument('--early', action='store_false', default=True, help='early stopping on validation or not')
 parser.add_argument('--method', type=str, default='MME', choices=['S+T', 'ENT', 'MME'],
@@ -73,6 +73,7 @@ source_labeled_loader, target_labeled_loader, target_unlabeled_loader, target_va
 # print(num_per_cls_list)
 
 # effective weights: https://openaccess.thecvf.com/content_CVPR_2019/papers/Cui_Class-Balanced_Loss_Based_on_Effective_Number_of_Samples_CVPR_2019_paper.pdf
+counter=0
 beta = 0.9999
 effective_num = 1.0 - np.power(beta, num_per_cls_list)
 per_cls_weights = (1.0 - beta) / np.array(effective_num)  # 1-ß/1-ß^n
@@ -161,12 +162,6 @@ loss_s_list = []
 loss_u_list = []
 loss_t_list = []
 loss_val_list = []
-with open('/gdrive/MyDrive/Colab Notebooks/um2/um/record/multi/MME/MME_net_alexnet_real_to_sketch_num_12_27_9',
-          'r') as f:
-    for line in f.readlines():
-        current = line.split(",")[2]
-        val_acc = current.split(" ")[4].replace("\n", "")
-        acc_list.append(val_acc)
 
 
 def main():
@@ -278,7 +273,7 @@ def main():
                 log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}' \
                     .format(step, lr, loss_comb, loss_s, loss_u, -loss_t)
                 print(log_train)
-                with open("loss_record", 'a') as f:
+                with open("loss_record_alex", 'a') as f:
                     f.write(log_train + '\n')
                 loss_val, acc_val = test(target_val_labeled_loader)
                 G.train()
@@ -294,15 +289,25 @@ def main():
                     counter += 1
                 if args.early:
                     if counter > args.patience:
+                        print('=> saving model')
+                        if not os.path.exists(args.save_model_path):
+                            os.makedirs(args.save_model_path)
+                        filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}_{}_final.pth".
+                                                format(args.log_file, args.source, args.target, step, args.net))
+                        state = {'step': step + 1,
+                                 'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
+                                 'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
+                                 'best_acc': best_acc}
+                        torch.save(state, filename)
                         break;
-                print('Best val accuracy %f, Current val accuracy %f\n' % (best_acc, acc_val))
+                print('Best val accuracy %f, Current val accuracy %f, Current val loss %f\n' % (best_acc, acc_val, loss_val))
 
                 print('record %s' % record_file)
                 with open(record_file, 'a') as f:
-                    f.write('step %d, best %f, current val accuracy %f\n' % (step, best_acc, acc_val))
-                # plot_acc_loss(args.val_interval,args.net,loss_val_list,acc_list)
+                    f.write('step %d, best %f, current val accuracy %f, current val loss %f\n' % (step, best_acc, acc_val, loss_val))
+                plot_acc_loss(args.val_interval,args.net,loss_val_list,acc_list)
                 plot_acc(args.val_interval, args.net, acc_list)
-                # plot_loss(args.val_interval,args.net,loss_val_list)
+                plot_loss(args.val_interval,args.net,loss_val_list)
                 G.train()
                 F1.train()
 
@@ -311,8 +316,8 @@ def main():
                         print('=> saving model')
                         if not os.path.exists(args.save_model_path):
                             os.makedirs(args.save_model_path)
-                        filename = os.path.join(args.save_model_path, "{}_{}_{}_to_{}_step_{}.pth".
-                                                format(args.net, args.log_file, args.source, args.target, step))
+                        filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}_{}.pth".
+                                                format(args.log_file, args.source, args.target, step, args.net))
                         state = {'step': step + 1,
                                  'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
                                  'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
