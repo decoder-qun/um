@@ -1,3 +1,8 @@
+#make alex and vgg run on colab at the same time,
+# add more record detail.I set patience at 30,
+# save pic every 1000 epoch, save model every 1000 epoch,
+# do validate every 10 epoch and save this record in the file.
+
 import torch
 import torch.nn as nn
 import argparse
