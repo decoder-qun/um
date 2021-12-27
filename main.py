@@ -11,15 +11,15 @@ from model.basenet import VGGBase, AlexNetBase
 from model.resnet_meta import resnet34,ResNet32, resnet32, Predictor_meta, Predictor_deep_meta
 from model.resnet import resnet34,Predictor, Predictor_deep
 from loss import adentropy
-from utils import weights_init,inv_lr_scheduler,to_var
-
+from utils import weights_init,inv_lr_scheduler,to_var,plot_acc_loss,plot_acc,plot_loss
+import time
 
 device="cuda" if torch.cuda.is_available() else "cpu"
 print(device)
 parser = argparse.ArgumentParser(description='meta-uda')
 #TODO
-parser.add_argument('--finish',type=str,default='T',choices=['T','F'],help='source part has trained or not')
-parser.add_argument('--net',default='resnet34',help='which network to use as backbone')
+parser.add_argument('--finish',type=str,default='F',choices=['T','F'],help='source part has trained or not')
+parser.add_argument('--net',default='alexnet',help='which network to use as backbone')
 parser.add_argument('--traditional_method',type=str,default='nometa',choices=['meta','nometa'],help='use meta or not')
 #TODO
 parser.add_argument('--resume',action='store_true',help='resume from checkpoint',
@@ -53,7 +53,9 @@ print('Dataset:%s\tSource:%s\tTarget:%s\tLabeled num perclass:%s\tNetwork:%s\t' 
 record_dir='record/%s/%s'%(args.dataset,args.method)
 if not os.path.exists(record_dir):
     os.makedirs(record_dir)
-record_file=os.path.join(record_dir,'%s_net_%s_%s_to_%s_num_%s'%(args.method,args.net,args.source,args.target,args.num))
+t = time.localtime()
+
+record_file=os.path.join(record_dir,'%s_net_%s_%s_to_%s_num_%d_%d_%d'%(args.method,args.net,args.source,args.target,t.tm_mon, t.tm_mday, t.tm_hour))
 # log_file_name = './logs/'+'/'+args.log_file
 # ReDirectSTD(log_file_name, 'stdout', True)# File will be deleted if already existing.
 
@@ -143,6 +145,12 @@ target_labeled_label=Variable(target_labeled_label)
 val_image=Variable(val_image)
 val_label=Variable(val_label)
 
+acc_list=[]
+loss_comb_list=[]
+loss_s_list=[]
+loss_u_list=[]
+loss_t_list=[]
+loss_val_list=[]
 
 
 def main():
@@ -156,6 +164,7 @@ def main():
         optimizer_f.zero_grad()
 
     start_step=0
+    best_acc=0.0
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
@@ -166,6 +175,8 @@ def main():
             optimizer_g.load_state_dict(checkpoint['optimizer_g'])
             F1.load_state_dict(checkpoint['state_dict_F'])
             optimizer_f.load_state_dict(checkpoint['optimizer_f'])
+            best_acc.load_state_dict(checkpoint['best_acc'])
+            print("best_acc:",best_acc)
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -242,46 +253,57 @@ def main():
             optimizer_g.step()
             optimizer_f.step()
 
+            loss_comb_list.append(loss_comb)
+            loss_s_list.append(loss_s)
+            loss_u_list.append(loss_u)
+            loss_t_list.append(loss_t)
 
-            best_acc=0.0
-            if step% args.save_interval ==0 and step>0:
+            if step % args.val_interval == 0 and step > 0:
                 log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}' \
                     .format(step, lr, loss_comb, loss_s, loss_u, -loss_t)
                 print(log_train)
-                loss_val,acc_val=test(target_val_labeled_loader)
+                with open("loss_record", 'a') as f:
+                    f.write(log_train + '\n')
+                loss_val, acc_val = test(target_val_labeled_loader)
                 G.train()
                 F1.train()
-                if acc_val>=best_acc:
-                    best_acc=acc_val
-                    counter=0
+
+                acc_list.append(acc_val)
+                loss_val_list.append(loss_val)
+
+                if acc_val >= best_acc:
+                    best_acc = acc_val
+                    counter = 0
                 else:
-                    counter+=1
+                    counter += 1
                 if args.early:
-                    if counter>args.patience:
+                    if counter > args.patience:
                         break;
-                print('Best val accuracy %f, Current val accuracy %f\n'%(best_acc,acc_val))
+                print('Best val accuracy %f, Current val accuracy %f\n' % (best_acc, acc_val))
 
-                print('record %s'% record_file)
-                with open(record_file,'a') as f:
-                    f.write('step %d, best %f, current val accuracy %f\n'%(step,best_acc,acc_val))
-
+                print('record %s' % record_file)
+                with open(record_file, 'a') as f:
+                    f.write('step %d, best %f, current val accuracy %f\n' % (step, best_acc, acc_val))
+                plot_acc_loss(args.val_interval, args.net, loss_val_list, acc_list)
+                plot_acc(args.val_interval, args.net, acc_list)
+                plot_loss(args.val_interval, args.net, loss_val_list)
                 G.train()
                 F1.train()
 
                 if args.save_check:
-                    if step% args.save_interval== 0 and step>0:
+                    if step % args.save_interval == 0 and step > 0:
                         print('=> saving model')
                         if not os.path.exists(args.save_model_path):
                             os.makedirs(args.save_model_path)
-                        filename = os.path.join(args.save_model_path,"{}_{}_to_{}_step_{}.pth".
-                                                format(args.log_file, args.source,args.target,step))
+                        filename = os.path.join(args.save_model_path, "{}_{}_{}_to_{}_step_{}.pth".
+                                                format(args.net, args.log_file, args.source, args.target, step))
                         state = {'step': step + 1,
-                                 'state_dict_G': G.state_dict(),'optimizer_g': optimizer_g.state_dict(),
-                                 'state_dict_F': F1.state_dict(),'optimizer_f': optimizer_f.state_dict()}
+                                 'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
+                                 'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
+                                 'best_acc': best_acc}
                         torch.save(state, filename)
 
-
-# --------------------------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------------------------
 #
 #                                             meta-train
 #
@@ -291,7 +313,7 @@ def main():
 
 
     start_meta_step=0
-
+    best_acc=0.0
     if args.finish=='T':
         for step in range(start_meta_step,args.meta_train_steps):
             # --------------------------------------------------------------------------------------------------
@@ -312,7 +334,10 @@ def main():
                 meta_G = resnet34()
                 inc = 512
                 meta_F1 = Predictor_deep(num_class=len(num_per_cls_list),inc=inc)
-
+            elif args.net=='vgg':
+                meta_G = VGGBase()
+                inc = 4096
+                meta_F1 = Predictor(num_class=len(num_per_cls_list),inc=inc)
             meta_G.to(device)
             meta_F1.to(device)
             # copy params
@@ -321,20 +346,21 @@ def main():
             meta_G.train()
             meta_F1.train()
 
-            optimizer_g_meta = optim.SGD(meta_params, momentum=0.9, weight_decay=0.0005, nesterov=True)
-            optimizer_f_meta = optim.SGD(list(F1.parameters()), lr=1.0, momentum=0.9, weight_decay=0.0005, nesterov=True)
-            lr_meta = optimizer_f_meta.param_groups[0]['lr']
 
             meta_params = []
             for key, value in dict(meta_G.named_parameters()).items():
                 if value.requires_grad:
                     if 'classifier' not in key:
-                        meta_params += [{'params': [value], 'lr': lr_meta,
+                        meta_params += [{'params': [value], 'lr': args.multi,
                                     'weight_decay': 0.0005}]
                     else:
                         print("classifier not in key!")
-                        meta_params += [{'params': [value], 'lr': lr_meta,
+                        meta_params += [{'params': [value], 'lr': args.multi*10,
                                     'weight_decay': 0.0005}]
+
+            optimizer_g_meta = optim.SGD(meta_params, momentum=0.9, weight_decay=0.0005, nesterov=True)
+            optimizer_f_meta = optim.SGD(list(F1.parameters()), lr=1.0, momentum=0.9, weight_decay=0.0005, nesterov=True)
+            lr_meta = optimizer_f_meta.param_groups[0]['lr']
 
             meta_param_lr_g = []
             meta_param_lr_f = []
@@ -445,11 +471,10 @@ def main():
             optimizer_f.step()
             zero_grad_all()
 
-            log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
-                .format(step, lr, loss_comb_mean, loss_s.mean(), loss_u.mean(), -loss_t, loss_target, loss_target_new)
+            log_train = 'Ep: {} lr: {} lr_meta:{} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
+                .format(step, lr,lr_meta, loss_comb_mean, loss_s.mean(), loss_u.mean(), -loss_t, loss_target, loss_target_new)
             print(log_train)
 
-            best_acc = 0.0
             if step % args.save_interval == 0 and step > 0:
                 loss_val, acc_val = test(target_val_labeled_loader)
                 G.train()
@@ -477,11 +502,12 @@ def main():
                     print('=> saving meta model')
                     if not os.path.exists(args.save_model_path):
                         os.makedirs(args.save_model_path)
-                    filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}.pth".
-                                            format(args.log_file, args.source, args.target, step))
+                    filename = os.path.join(args.save_model_path, "{}_{}_{}_to_{}_step_{}.pth".
+                                            format(args.net, args.log_file, args.source, args.target, step))
                     state = {'step': step + 1,
                              'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
-                             'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict()}
+                             'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
+                             'best_acc':best_acc}
                     torch.save(state, filename)
 
 

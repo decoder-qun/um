@@ -2,6 +2,8 @@ import torch.cuda
 import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
+import matplotlib.pyplot as plt
+
 def weights_init(m):
     classname=m.__class__.__name__
     # print(classname)
@@ -28,3 +30,44 @@ def inv_lr_scheduler(param_lr,optimizer,iter_num,
         param_group['lr']=lr*param_lr[i]
         i+=1
     return optimizer
+
+
+def plot_acc_loss(val_interval,net,loss, acc):
+
+    acc_,=plt.plot([i*val_interval for i in range(1,1+len(acc))],acc,label="accuracy")
+    loss_,=plt.plot([i*val_interval for i in range(1,1+len(loss))], loss, label="loss")
+    plt.title('validation accuracy&loss')
+    plt.xlabel('epoches')
+    plt.ylabel('accuracy&loss')
+
+    # Create a legend for the first line.
+    first_legend = plt.legend(handles=[acc_], loc=1)
+
+    # Add the legend manually to the current Axes.
+    ax = plt.gca().add_artist(first_legend)
+
+    # Create another legend for the second line.
+    plt.legend(handles=[loss_], loc=4)
+
+    plt.draw()
+    plt.savefig('save_pic/%s_epoch%d.jpg'%(net,val_interval*len(loss)))
+    plt.show()
+
+def plot_acc(val_interval,net, acc):
+    acc_,=plt.plot([i*val_interval for i in range(1,1+len(acc))],acc,label="accuracy")
+    plt.title('validation accuracy')
+    plt.xlabel('epoches')
+    plt.ylabel('accuracy')
+    plt.draw()
+    plt.savefig('save_pic/%s_epoch%d_acc.jpg'%(net,val_interval*len(acc)))
+    plt.show()
+
+
+def plot_loss(val_interval,net,loss):
+    loss_,=plt.plot([i*val_interval for i in range(1,1+len(loss))], loss, label="loss")
+    plt.title('validation loss')
+    plt.xlabel('epoches')
+    plt.ylabel('loss')
+    plt.draw()
+    plt.savefig('save_pic/%s_epoch%d_loss.jpg'%(net,val_interval*len(loss)))
+    plt.show()
