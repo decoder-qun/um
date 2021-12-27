@@ -434,6 +434,8 @@ def main():
         # --------------------------------------------------------------------------------------------------
         #              trained with  target_labeled, loss=mean( (eps'+weights)*loss_target ), update model
         # --------------------------------------------------------------------------------------------------
+            G.train()
+            F1.train()
             feature = G(image) # 32, 4096
             predict = F1(feature) # 32, 126
             loss_target_new=F.cross_entropy(predict,label,reduction='none')
