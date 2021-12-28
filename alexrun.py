@@ -25,8 +25,6 @@ parser = argparse.ArgumentParser(description='meta-uda')
 # TODO
 parser.add_argument('--finish', type=str, default='F', choices=['T', 'F'], help='source part has trained or not')
 parser.add_argument('--net', default='alexnet', help='which network to use as backbone')
-parser.add_argument('--traditional_method', type=str, default='nometa', choices=['meta', 'nometa'],
-                    help='use meta or not')
 # TODO
 parser.add_argument('--resume', action='store_true', help='resume from checkpoint',
                     default=True)
@@ -45,33 +43,30 @@ parser.add_argument('--dataset', type=str, default='multi', choices=['multi', 'o
 parser.add_argument('-source', default='real', help='source dataset')
 parser.add_argument('--target', default='sketch', help='target dataset')
 
-parser.add_argument('--num', type=int, default=3, help='number of labeled examples in the target')
 parser.add_argument('--threshold', type=float, default=0.95, help='loss weight')
 parser.add_argument('--beta', type=float, default=1.0, help='loss weight')
 parser.add_argument('--lr', type=float, default=0.01, metavar='LR', help='learning rate')
 
 parser.add_argument('--save_check', action='store_true', default=True, help='save checkpoint or not')
-parser.add_argument('--save_model_path', type=str, default='./save_model', help='dir to save model')
 parser.add_argument('--lamda', type=float, default=0.1, metavar='LAM',
                     help='value of lamda used in entropy and adentropy')
-parser.add_argument('--patience', type=int, default=30, metavar='S',
+parser.add_argument('--patience', type=int, default=20, metavar='S',
                     help='early stopping to wait for improvement before terminating')
 parser.add_argument('--early', action='store_false', default=True, help='early stopping on validation or not')
 parser.add_argument('--method', type=str, default='MME', choices=['S+T', 'ENT', 'MME'],
                     help='MME is proposed method, ENT is entropy minimization, S+T is training only on labeled examples')
-parser.add_argument('--log_file', type=str, default='./temp.log', help='dir to save checkpoint')
+
 
 args = parser.parse_args(args=[])
-print('Dataset:%s\tSource:%s\tTarget:%s\tLabeled num perclass:%s\tNetwork:%s\t' % (
-args.dataset, args.source, args.target, args.num, args.net))
-record_dir = 'record/%s/%s' % (args.dataset, args.method)
+print('Dataset:%s\tSource:%s\tTarget:%s\tNetwork:%s\t' % (
+args.dataset, args.source, args.target, args.net))
+record_dir = 'record/%s/%s/%s' % (args.dataset, args.method, args.net)
 if not os.path.exists(record_dir):
     os.makedirs(record_dir)
 t = time.localtime()
-record_file = os.path.join(record_dir, '%s_net_%s_%s_to_%s_num_%d_%d_%d' % (
-args.method, args.net, args.source, args.target, t.tm_mon, t.tm_mday, t.tm_hour))
-# log_file_name = './logs/'+'/'+args.log_file
-# ReDirectSTD(log_file_name, 'stdout', True)# File will be deleted if already existing.
+record_file = os.path.join(record_dir, '%s_to_%s_time_%d_%d_%d' % (
+args.source, args.target, t.tm_mon, t.tm_mday, t.tm_hour))
+
 
 source_labeled_loader, target_labeled_loader, target_unlabeled_loader, target_val_labeled_loader, target_test_unlabeled_loader, num_per_cls_list = return_dataset(
     args)
@@ -85,20 +80,6 @@ per_cls_weights = (1.0 - beta) / np.array(effective_num)  # 1-ß/1-ß^n
 per_cls_weights = per_cls_weights / np.sum(per_cls_weights) * len(num_per_cls_list)  # normalization
 per_cls_weights = torch.FloatTensor(per_cls_weights)
 
-
-def G_F1_meta(args):
-    if args.net == 'resnet32':
-        G = resnet32()
-        inc = 512
-    else:
-        raise ValueError("Model cannot be recognized.")
-    # F1 = Predictor_meta(num_class=len(num_per_cls_list), inc=inc)  # temp=T=0.05
-
-    if "resnet" in args.net:
-        F1 = Predictor_deep(num_class=len(num_per_cls_list), inc=inc)
-    else:
-        F1 = Predictor(num_class=len(num_per_cls_list), inc=inc)  # temp=T=0.05
-    return G, F1
 
 
 def G_F1(args):
@@ -120,10 +101,7 @@ def G_F1(args):
     return G, F1
 
 
-if args.traditional_method == 'meta':
-    G, F1 = G_F1_meta(args)
-elif args.traditional_method == 'nometa':
-    G, F1 = G_F1(args)
+G, F1 = G_F1(args)
 lr = args.lr
 weights_init(F1)
 G.to(device)
@@ -275,11 +253,6 @@ def main():
             loss_t_list.append(loss_t)
 
             if step % args.val_interval == 0 and step > 0:
-                log_train = 'Ep: {} lr: {} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f}' \
-                    .format(step, lr, loss_comb, loss_s, loss_u, -loss_t)
-                print(log_train)
-                with open("loss_record_alex", 'a') as f:
-                    f.write(log_train + '\n')
                 loss_val, acc_val = test(target_val_labeled_loader)
                 G.train()
                 F1.train()
@@ -295,21 +268,25 @@ def main():
                 if args.early:
                     if counter > args.patience:
                         print('=> saving model')
-                        if not os.path.exists(args.save_model_path):
-                            os.makedirs(args.save_model_path)
-                        filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}_{}_final.pth".
-                                                format(args.log_file, args.source, args.target, step, args.net))
+                        model_path = "/save_model/{}".format(args.method)
+                        if not os.path.exists(model_path):
+                            os.makedirs(model_path)
+                        filename = "/save_model/{}/{}_{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
+                                                                                      args.target, step, args.net)
                         state = {'step': step + 1,
                                  'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
                                  'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
                                  'best_acc': best_acc}
                         torch.save(state, filename)
                         break;
-                print('Best val accuracy %f, Current val accuracy %f, Current val loss %f\n' % (best_acc, acc_val, loss_val))
-
-                print('record %s' % record_file)
+                log_train = 'Ep:{} lr:{} loss_comb:{:.6f} loss_s:{:.6f} loss_u:{:.6f} loss_t:{:.6f} ' \
+                    .format(step, lr, loss_comb, loss_s, loss_u, -loss_t)
+                print(log_train)
+                log_val = 'Best_acc:{} Curr_acc:{} Curr_loss:{}\n'.format(best_acc, acc_val, loss_val)
+                print(log_val)
                 with open(record_file, 'a') as f:
-                    f.write('step %d, best %f, current val accuracy %f, current val loss %f\n' % (step, best_acc, acc_val, loss_val))
+                    f.write(log_train+log_val)
+
                 plot_acc_loss(args.val_interval,args.net,loss_val_list,acc_list)
                 plot_acc(args.val_interval, args.net, acc_list)
                 plot_loss(args.val_interval,args.net,loss_val_list)
@@ -319,10 +296,10 @@ def main():
                 if args.save_check:
                     if step % args.save_interval == 0 and step > 0:
                         print('=> saving model')
-                        if not os.path.exists(args.save_model_path):
-                            os.makedirs(args.save_model_path)
-                        filename = os.path.join(args.save_model_path, "{}_{}_to_{}_step_{}_{}.pth".
-                                                format(args.log_file, args.source, args.target, step, args.net))
+                        model_path="/save_model/{}".format(args.method)
+                        if not os.path.exists(model_path):
+                            os.makedirs(model_path)
+                        filename = "/save_model/{}/{}_{}_to_{}_step_{}_{}.pth".format(args.method,args.source, args.target, step, args.net)
                         state = {'step': step + 1,
                                  'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
                                  'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
@@ -351,18 +328,7 @@ def main():
 
             # start for the copied model
             # every step we new a model, including G & F1
-            if args.net == 'alexnet':
-                meta_G = AlexNetBase()
-                inc = 4096
-                meta_F1 = Predictor(num_class=len(num_per_cls_list), inc=inc)
-            elif args.net == 'resnet34':
-                meta_G = resnet34()
-                inc = 512
-                meta_F1 = Predictor_deep(num_class=len(num_per_cls_list), inc=inc)
-            elif args.net == 'vgg':
-                meta_G = VGGBase()
-                inc = 4096
-                meta_F1 = Predictor(num_class=len(num_per_cls_list), inc=inc)
+            meta_G, meta_F1 = G_F1(args)
             meta_G.to(device)
             meta_F1.to(device)
             # copy params
@@ -496,12 +462,6 @@ def main():
             optimizer_f.step()
             zero_grad_all()
 
-            log_train = 'Ep: {} lr: {} lr_meta:{} loss_comb: {:.6f} loss_s: {:.6f} loss_u: {:.6f} loss_t: {:.6f} loss_target: {:.6f} loss_target_new: {:.6f}' \
-                .format(step, lr, lr_meta, loss_comb_mean, loss_s.mean(), loss_u.mean(), -loss_t, loss_target,
-                        loss_target_new)
-            print(log_train)
-
-            best_acc = 0.0
             if step % args.save_interval == 0 and step > 0:
                 loss_val, acc_val = test(target_val_labeled_loader)
                 G.train()
@@ -513,26 +473,42 @@ def main():
                     counter += 1
                 if args.early:
                     if counter > args.patience:
+                        print('=> saving meta model')
+                        model_path = "/save_meta_model/{}".format(args.method)
+                        if not os.path.exists(model_path):
+                            os.makedirs(model_path)
+                        filename = "/save_meta_model/{}/{}_{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
+                                                                                           args.target,
+                                                                                           step, args.net)
+                        state = {'step': step + 1,
+                                 'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
+                                 'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
+                                 'best_acc': best_acc}
+                        torch.save(state, filename)
                         break;
-                print('Best val accuracy %f, Current val accuracy %f\n' % (best_acc, acc_val))
 
-                print('record %s' % record_file)
+                log_train = 'Meta_Ep:{} lr:{} loss_comb:{:.6f} loss_s:{:.6f} loss_u:{:.6f} loss_t:{:.6f} ' \
+                    .format(step, lr, loss_comb, loss_s, loss_u, -loss_t)
+                print(log_train)
+                log_val = 'Best_acc:{} Curr_acc:{} Curr_loss:{}\n'.format(best_acc, acc_val, loss_val)
+                print(log_val)
                 with open(record_file, 'a') as f:
-                    f.write('meta step %d, best %f, current val accuracy %f\n' % (step, best_acc, acc_val))
-
+                    f.write(log_train + log_val)
             G.train()
             F1.train()
 
             if args.save_check:
                 if step % args.save_interval == 0 and step > 0:
                     print('=> saving meta model')
-                    if not os.path.exists(args.save_model_path):
-                        os.makedirs(args.save_model_path)
-                    filename = os.path.join(args.save_model_path, "{}_{}_{}_to_{}_step_{}.pth".
-                                            format(args.net, args.log_file, args.source, args.target, step))
+                    model_path = "/save_meta_model/{}".format(args.method)
+                    if not os.path.exists(model_path):
+                        os.makedirs(model_path)
+                    filename = "/save_meta_model/{}/{}_{}_to_{}_step_{}_{}.pth".format(args.method, args.source, args.target,
+                                                                                  step, args.net)
                     state = {'step': step + 1,
                              'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
-                             'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict()}
+                             'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
+                             'best_acc':best_acc}
                     torch.save(state, filename)
 
 
