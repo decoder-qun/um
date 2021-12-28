@@ -267,10 +267,10 @@ def main():
                 if args.early:
                     if counter > args.patience:
                         print('=> saving model')
-                        model_path = "/save_model/{}".format(args.method)
+                        model_path = "save_model/{}".format(args.method)
                         if not os.path.exists(model_path):
                             os.makedirs(model_path)
-                        filename = "/save_model/{}/{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
+                        filename = "save_model/{}/{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
                                                                                       args.target, step, args.net)
                         state = {'step': step + 1,
                                  'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
@@ -295,10 +295,10 @@ def main():
                 if args.save_check:
                     if step % args.save_interval == 0 and step > 0:
                         print('=> saving model')
-                        model_path="/save_model/{}".format(args.method)
+                        model_path="save_model/{}".format(args.method)
                         if not os.path.exists(model_path):
                             os.makedirs(model_path)
-                        filename = "/save_model/{}/{}_to_{}_step_{}_{}.pth".format(args.method,args.source, args.target, step, args.net)
+                        filename = "save_model/{}/{}_to_{}_step_{}_{}.pth".format(args.method,args.source, args.target, step, args.net)
                         state = {'step': step + 1,
                                  'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
                                  'state_dict_F': F1.state_dict(), 'optimizer_f': optimizer_f.state_dict(),
@@ -473,10 +473,10 @@ def main():
                 if args.early:
                     if counter > args.patience:
                         print('=> saving meta model')
-                        model_path = "/save_meta_model/{}".format(args.method)
+                        model_path = "save_meta_model/{}".format(args.method)
                         if not os.path.exists(model_path):
                             os.makedirs(model_path)
-                        filename = "/save_meta_model/{}/{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
+                        filename = "save_meta_model/{}/{}_to_{}_step_{}_{}_final.pth".format(args.method, args.source,
                                                                                            args.target,
                                                                                            step, args.net)
                         state = {'step': step + 1,
@@ -499,10 +499,10 @@ def main():
             if args.save_check:
                 if step % args.save_interval == 0 and step > 0:
                     print('=> saving meta model')
-                    model_path = "/save_meta_model/{}".format(args.method)
+                    model_path = "save_meta_model/{}".format(args.method)
                     if not os.path.exists(model_path):
                         os.makedirs(model_path)
-                    filename = "/save_meta_model/{}/{}_to_{}_step_{}_{}.pth".format(args.method, args.source, args.target,
+                    filename = "save_meta_model/{}/{}_to_{}_step_{}_{}.pth".format(args.method, args.source, args.target,
                                                                                   step, args.net)
                     state = {'step': step + 1,
                              'state_dict_G': G.state_dict(), 'optimizer_g': optimizer_g.state_dict(),
