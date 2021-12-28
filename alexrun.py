@@ -42,11 +42,9 @@ parser.add_argument('--dataset', type=str, default='multi', choices=['multi', 'o
                     help='the name of dataset')
 parser.add_argument('-source', default='real', help='source dataset')
 parser.add_argument('--target', default='sketch', help='target dataset')
-
 parser.add_argument('--threshold', type=float, default=0.95, help='loss weight')
 parser.add_argument('--beta', type=float, default=1.0, help='loss weight')
 parser.add_argument('--lr', type=float, default=0.01, metavar='LR', help='learning rate')
-
 parser.add_argument('--save_check', action='store_true', default=True, help='save checkpoint or not')
 parser.add_argument('--lamda', type=float, default=0.1, metavar='LAM',
                     help='value of lamda used in entropy and adentropy')
