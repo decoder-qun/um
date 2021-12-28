@@ -51,10 +51,9 @@ def plot_acc_loss(val_interval,net,loss, acc):
     plt.legend(handles=[loss_], loc=4)
 
     plt.draw()
-    if(len(loss)%10==0):
-        if not os.path.exists("save_pic/"):
-            os.makedirs("save_pic/")
-        plt.savefig('save_pic/%s_epoch%d.jpg'%(net,val_interval*len(loss)))
+    if not os.path.exists("save_pic/"):
+        os.makedirs("save_pic/")
+    plt.savefig('save_pic/%s_epoch%d.jpg'%(net,val_interval*len(loss)))
     plt.show()
 
 def plot_acc(val_interval,net, acc):
@@ -63,10 +62,9 @@ def plot_acc(val_interval,net, acc):
     plt.xlabel('epoches')
     plt.ylabel('accuracy')
     plt.draw()
-    if(len(acc)%10==0):
-        if not os.path.exists("save_pic/"):
-            os.makedirs("save_pic/")
-        plt.savefig('save_pic/%s_epoch%d_acc.jpg'%(net,val_interval*len(acc)))
+    if not os.path.exists("save_pic/"):
+        os.makedirs("save_pic/")
+    plt.savefig('save_pic/%s_epoch%d_acc.jpg'%(net,val_interval*len(acc)))
     plt.show()
 
 def plot_loss(val_interval,net,loss):
@@ -75,8 +73,7 @@ def plot_loss(val_interval,net,loss):
     plt.xlabel('epoches')
     plt.ylabel('loss')
     plt.draw()
-    if(len(loss)%10==0):
-        if not os.path.exists("save_pic/"):
-            os.makedirs("save_pic/")
-        plt.savefig('save_pic/%s_epoch%d_loss.jpg'%(net,val_interval*len(loss)))
+    if not os.path.exists("save_pic/"):
+        os.makedirs("save_pic/")
+    plt.savefig('save_pic/%s_epoch%d_loss.jpg'%(net,val_interval*len(loss)))
     plt.show()
