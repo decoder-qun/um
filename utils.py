@@ -69,7 +69,6 @@ def plot_acc(val_interval,net, acc):
         plt.savefig('save_pic/%s_epoch%d_acc.jpg'%(net,val_interval*len(acc)))
     plt.show()
 
-
 def plot_loss(val_interval,net,loss):
     loss_,=plt.plot([i*val_interval for i in range(1,1+len(loss))], loss, label="loss")
     plt.title('validation loss')
