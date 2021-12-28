@@ -25,7 +25,7 @@ parser.add_argument('--resume', action='store_true', help='resume from checkpoin
                     default=True)
 parser.add_argument('--save_interval', type=int, default=1000, metavar='N',
                     help='how many batches to wait before logging')
-parser.add_argument('--val_interval', type=int, default=10, metavar='N',
+parser.add_argument('--val_interval', type=int, default=100, metavar='N',
                     help='how many batches to wait before logging')
 parser.add_argument('--meta_resume', action='store_true', help='meta resume from checkpoint',
                     default=True)

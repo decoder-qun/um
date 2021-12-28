@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.autograd import Variable
 import numpy as np
 import matplotlib.pyplot as plt
+import os
 
 def weights_init(m):
     classname=m.__class__.__name__
@@ -51,6 +52,8 @@ def plot_acc_loss(val_interval,net,loss, acc):
 
     plt.draw()
     if(len(loss)%10==0):
+        if not os.path.exists("save_pic/"):
+            os.makedirs("save_pic/")
         plt.savefig('save_pic/%s_epoch%d.jpg'%(net,val_interval*len(loss)))
     plt.show()
 
@@ -61,6 +64,8 @@ def plot_acc(val_interval,net, acc):
     plt.ylabel('accuracy')
     plt.draw()
     if(len(acc)%10==0):
+        if not os.path.exists("save_pic/"):
+            os.makedirs("save_pic/")
         plt.savefig('save_pic/%s_epoch%d_acc.jpg'%(net,val_interval*len(acc)))
     plt.show()
 
@@ -72,5 +77,7 @@ def plot_loss(val_interval,net,loss):
     plt.ylabel('loss')
     plt.draw()
     if(len(loss)%10==0):
+        if not os.path.exists("save_pic/"):
+            os.makedirs("save_pic/")
         plt.savefig('save_pic/%s_epoch%d_loss.jpg'%(net,val_interval*len(loss)))
     plt.show()
