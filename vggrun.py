@@ -53,8 +53,7 @@ parser.add_argument('--early', action='store_false', default=True, help='early s
 parser.add_argument('--method', type=str, default='MME', choices=['S+T', 'ENT', 'MME'],
                     help='MME is proposed method, ENT is entropy minimization, S+T is training only on labeled examples')
 parser.add_argument('--log_file', type=str, default='./temp.log', help='dir to save checkpoint')
-parser.add_argument('--num', type=int, default=3,
-                    help='number of labeled examples in the target')
+
 args = parser.parse_args(args=[])
 print('Dataset:%s\tSource:%s\tTarget:%s\tLabeled num perclass:%s\tNetwork:%s\t' % (
 args.dataset, args.source, args.target, args.num, args.net))
