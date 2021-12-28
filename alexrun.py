@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 from return_dataset import return_dataset
 from model.basenet import VGGBase, AlexNetBase
-from model.resnet_meta import resnet34, ResNet32, resnet32, Predictor_meta, Predictor_deep_meta
+# from model.resnet_meta import resnet34, ResNet32, resnet32, Predictor_meta, Predictor_deep_meta
 from model.resnet import resnet34, Predictor, Predictor_deep
 from loss import adentropy
 from utils import weights_init, inv_lr_scheduler, to_var, plot_acc_loss, plot_acc, plot_loss
